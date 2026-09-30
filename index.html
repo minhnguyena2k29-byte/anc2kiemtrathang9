@@ -504,6 +504,7 @@
 <div class="footer-bar">
   <button class="btn-submit" id="submitBtn">Nộp bài &amp; gửi cho giáo viên</button>
   <button class="btn-email" id="retryBtn" style="display:none;">Gửi lại bài cho giáo viên</button>
+  <button class="btn-email" id="downloadBtn" style="display:none;">Tải bài làm về máy</button>
   <button class="btn-unlock" id="unlockBtn">Xem đáp án (giáo viên)</button>
 </div>
 <div id="emailStatus"></div>
@@ -540,6 +541,10 @@
 // ---------- Load data ----------
 const examData = JSON.parse(document.getElementById('examDataJson').textContent);
 const TEACHER_EMAIL = "minhnguyena2k29@gmail.com";
+// Web3Forms: access key gắn với Gmail nhận bài (key này không phải bí mật, được phép để trong trang web)
+const WEB3FORMS_KEY = "5b975045-2a48-4254-9c45-105514c204cb";
+const SEND_VIA = "web3forms";   // đánh dấu bài đã gửi bằng nền tảng mới
+let lastResultText = "";
 const PASSWORD = "anhnangcao1";
 const TOTAL_SECONDS = 90 * 60;
 
@@ -933,6 +938,7 @@ function showEmailStatus(msg, color, showRetry) {
   status.style.color = color;
   status.textContent = msg;
   document.getElementById('retryBtn').style.display = showRetry ? 'inline-block' : 'none';
+  document.getElementById('downloadBtn').style.display = showRetry ? 'inline-block' : 'none';
   document.getElementById('retryBtn').disabled = false;
 }
 
@@ -985,30 +991,52 @@ function sendResultEmail() {
   }
 
   document.getElementById('retryBtn').style.display = 'none';
+  document.getElementById('downloadBtn').style.display = 'none';
   showEmailStatus('Đang gửi bài cho giáo viên...', '#4b5b54', false);
 
-  fetch("https://formsubmit.co/ajax/" + TEACHER_EMAIL, {
+  lastResultText = lines.join("\n");
+
+  if (!WEB3FORMS_KEY || WEB3FORMS_KEY === "DAN_ACCESS_KEY_VAO_DAY") {
+    showEmailStatus('Bài đã nộp nhưng chưa gửi được cho giáo viên (thiếu access key). Các em bấm "Tải bài làm về máy" và gửi file cho thầy/cô nhé.', '#a8402d', true);
+    return;
+  }
+
+  fetch("https://api.web3forms.com/submit", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Accept": "application/json" },
     body: JSON.stringify({
-      _subject: "Kết quả bài kiểm tra tháng 9 - " + name,
+      access_key: WEB3FORMS_KEY,
+      subject: "Kết quả bài kiểm tra tháng 9 - " + name,
+      from_name: name,
       name: name,
       score: autoScore + " / " + autoTotal,
       tab_switches: String(tabSwitchCount),
-      answers: lines.join("\n")
+      answers: lastResultText
     })
   })
   .then(res => res.json().then(data => ({ ok: res.ok, data: data })))
   .then(r => {
-    if (!r.ok || String(r.data && r.data.success) === 'false') throw new Error('send failed');
+    if (!r.ok || !r.data || r.data.success !== true) throw new Error('send failed');
     emailSent = true;
     saveState();
     showEmailStatus('Bài làm đã được nộp và gửi đến giáo viên.', '#1c6e4a', false);
   })
   .catch(() => {
-    showEmailStatus('Bài đã nộp nhưng gửi email thất bại. Kiểm tra mạng rồi bấm "Gửi lại bài cho giáo viên".', '#a8402d', true);
+    showEmailStatus('Bài đã nộp nhưng gửi email thất bại. Kiểm tra mạng rồi bấm "Gửi lại bài cho giáo viên", hoặc tải bài làm về máy và gửi cho giáo viên.', '#a8402d', true);
   });
 }
+function downloadResult() {
+  const nm = (document.getElementById('studentName').value.trim() || 'hoc-sinh').replace(/[^\w\-]+/g, '_');
+  const blob = new Blob([lastResultText || 'Chưa có dữ liệu bài làm.'], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bai-lam-thang-9-' + nm + '.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+document.getElementById('downloadBtn').addEventListener('click', () => {
+  if (!lastResultText) sendResultEmail();
+  downloadResult();
+});
 document.getElementById('retryBtn').addEventListener('click', sendResultEmail);
 
 // ---------- Teacher unlock / reveal answers ----------
@@ -1119,6 +1147,7 @@ function saveState() {
       secondsLeft: secondsLeft,
       examLocked: examLocked,
       emailSent: emailSent,
+      sendVia: emailSent ? SEND_VIA : null,
       audioPlays: audioPlays,
       savedAt: Date.now()
     };
@@ -1179,7 +1208,7 @@ function restoreState() {
     audioPlays = state.audioPlays;
     audioPlayers.forEach(p => p.refresh());
   }
-  emailSent = !!state.emailSent;
+  emailSent = !!state.emailSent && state.sendVia === SEND_VIA;
 
   if (state.examLocked) {
     doSubmit(true);
